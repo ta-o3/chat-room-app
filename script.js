@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function connectWebSocket() {
         // WebSocketサーバーのURL（localhost）
         // デプロイ時には 'wss://your-deploy-url.onrender.com' のように変更
-        ws = new WebSocket('ws://localhost:8080');
+        ws = new WebSocket('wss://chat-room-app-ym1g.onrender.com');
 
         ws.onopen = () => {
             console.log('WebSocketサーバーに接続しました。');
