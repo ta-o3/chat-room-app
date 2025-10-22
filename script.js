@@ -8,52 +8,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const sendButton = document.getElementById('send-button');
 
     let username = '';
-    let ws;
+    let lastMessageTimestamp = 0; // 最後に取得したメッセージのタイムスタンプ
+    let messagePollingInterval; // ポーリングのインターバルID
 
-    // --- WebSocket接続とイベントリスナー --- //
-
-    function connectWebSocket() {
-        // WebSocketサーバーのURL（localhost）
-        // デプロイ時には 'wss://your-deploy-url.onrender.com' のように変更
-        ws = new WebSocket('wss://chat-room-app-ym1g.onrender.com');
-
-        ws.onopen = () => {
-            console.log('WebSocketサーバーに接続しました。');
-            // サーバーに参加を通知
-            ws.send(JSON.stringify({ type: 'join', user: username }));
-        };
-
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.type === 'history') {
-                data.messages.forEach(msg => addMessageToUI(msg));
-            } else {
-                addMessageToUI(data);
-            }
-        };
-
-        ws.onclose = () => {
-            console.log('WebSocketサーバーから切断されました。');
-            // 予期せぬ切断の際に通知を表示
-            addMessageToUI({ 
-                type: 'notification', 
-                message: 'サーバーとの接続が切れました。リロードしてください。' 
-            });
-        };
-
-        ws.onerror = (error) => {
-            console.error('WebSocketエラー:', error);
-            addMessageToUI({ 
-                type: 'notification', 
-                message: 'エラーが発生しました。接続を確認してください。' 
-            });
-        };
-    }
+    // --- APIエンドポイント --- //
+    const API_BASE_URL = window.location.origin; // 現在のホストを使用
 
     // --- UIへのメッセージ追加 --- //
 
-    function addMessageToUI(data) {
+    function addMessageToUI(data, isHistory = false) {
         const { type, user, text, message, timestamp } = data;
+
+        // 既に表示されているメッセージはスキップ
+        if (!isHistory && timestamp <= lastMessageTimestamp) {
+            return;
+        }
 
         const messageWrapper = document.createElement('div');
         messageWrapper.classList.add('message-wrapper');
@@ -99,19 +68,72 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 自動スクロール
         scrollToBottom();
+
+        // タイムスタンプを更新
+        if (timestamp > lastMessageTimestamp) {
+            lastMessageTimestamp = timestamp;
+        }
+    }
+
+    // --- メッセージのポーリング --- //
+
+    async function fetchMessages() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/messages`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const messages = await response.json();
+
+            // 履歴メッセージを一度クリアして再描画（簡易的な方法）
+            // より高度な実装では差分更新を行う
+            messagesContainer.innerHTML = ''; 
+            messages.forEach(msg => addMessageToUI(msg, true));
+
+            // 最新のメッセージのタイムスタンプを更新
+            if (messages.length > 0) {
+                lastMessageTimestamp = messages[messages.length - 1].timestamp;
+            }
+
+            // 入室通知をクライアント側で生成
+            // サーバーは入室をログするだけなので、クライアント側で通知を生成
+            // ただし、これは簡易的な実装であり、正確な入退室通知には限界がある
+            // サーバー側で入退室イベントを管理し、それをポーリングで取得する方が正確
+
+        } catch (error) {
+            console.error('メッセージの取得に失敗しました:', error);
+            // エラー通知は表示しない（頻繁に表示されるのを避けるため）
+        }
     }
 
     // --- イベントハンドラ --- //
 
     // 入室処理
-    function joinChat() {
+    async function joinChat() {
         const name = usernameInput.value.trim();
         if (name) {
             username = name;
             joinModal.classList.remove('active');
             chatContainer.classList.remove('hidden');
             messageInput.focus();
-            connectWebSocket();
+
+            // サーバーに入室を通知（ログ用）
+            try {
+                await fetch(`${API_BASE_URL}/join`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: username })
+                });
+                // クライアント側で入室通知を表示
+                addMessageToUI({ type: 'notification', message: `${username}さんが入室しました。` });
+            } catch (error) {
+                console.error('入室通知の送信に失敗しました:', error);
+            }
+
+            // メッセージのポーリングを開始
+            fetchMessages(); // 初回取得
+            messagePollingInterval = setInterval(fetchMessages, 3000); // 3秒ごとにポーリング
+
         } else {
             alert('名前を入力してください。');
         }
@@ -125,12 +147,25 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // メッセージ送信処理
-    function sendMessage() {
+    async function sendMessage() {
         const text = messageInput.value.trim();
-        if (text && ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'message', user: username, text: text }));
-            messageInput.value = '';
-            messageInput.focus();
+        if (text) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/send`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: username, text: text })
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                messageInput.value = '';
+                messageInput.focus();
+                fetchMessages(); // 送信後すぐにメッセージを再取得
+            } catch (error) {
+                console.error('メッセージの送信に失敗しました:', error);
+                alert('メッセージの送信に失敗しました。');
+            }
         }
     }
 
